@@ -48,20 +48,50 @@ COMPONENTS = [
     ("College and Career Acceleration 2024-25", "College & career acceleration"),
 ]
 TYPES = {"01": "Elementary", "02": "Middle", "03": "High", "04": "Combination"}
+# Prior-year files for the momentum view. Same layout; College & Career
+# Acceleration is reported a year late, so its header carries the cohort year.
+PRIOR = {2024: HERE / "data" / "SchoolGrades24.xlsx", 2025: HERE / "data" / "SchoolGrades25.xlsx"}
+MOM = ["Mathematics Learning Gains of the Lowest 25%",
+       "English Language Arts Learning Gains of the Lowest 25%",
+       "College and Career Acceleration"]  # prefix; full header ends in the cohort year
 
 
 def num(v):
     return v if isinstance(v, (int, float)) else None
 
 
+def read_sheet(path):
+    rows = list(openpyxl.load_workbook(path, read_only=True, data_only=True).worksheets[0].iter_rows(values_only=True))
+    i = next(i for i, r in enumerate(rows) if r[0] == "District Number")
+    hdr = [str(c).strip() if c is not None else "" for c in rows[i]]
+    return rows, [dict(zip(hdr, r)) for r in rows[i + 1:] if r[0]], hdr
+
+
+def school_key(d):
+    try:
+        return int(d["District Number"]), int(d["School Number"])
+    except (TypeError, ValueError):
+        return str(d["District Number"]).strip(), str(d["School Number"]).strip()
+
+
+def load_prior(path):
+    """{school key: [math L25, ELA L25, C&C accel, % of points]} plus the C&C cohort label."""
+    _, recs, hdr = read_sheet(path)
+    cca = next(h for h in hdr if h.startswith(MOM[2]))
+    vals = {school_key(d): [num(d[MOM[0]]), num(d[MOM[1]]), num(d[cca]), num(d[PP])] for d in recs}
+    return vals, cca.rsplit(" ", 1)[-1]
+
+
 def main():
-    wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
-    ws = wb.worksheets[0]
-    rows = list(ws.iter_rows(values_only=True))
+    rows, recs, hdr = read_sheet(SRC)
     title = next((r[2] for r in rows[:3] if r[2]), "School Grades")
-    hdr_i = next(i for i, r in enumerate(rows) if r[0] == "District Number")
-    hdr = rows[hdr_i]
-    recs = [dict(zip(hdr, r)) for r in rows[hdr_i + 1:] if r[0]]
+    prior, cohorts = {}, {}
+    for y, p in PRIOR.items():
+        if p.exists():
+            prior[y], cohorts[y] = load_prior(p)
+        else:
+            print(f"  (no {p.name}: momentum view will be empty for {y})")
+            prior[y], cohorts[y] = {}, ""
 
     keep, dropped = [], 0
     for d in recs:
@@ -95,6 +125,8 @@ def main():
             "ch": d["Charter School"] == "YES",
             "t1": d["Title I"] == "YES",
             "c": [num(d[k]) for k, _ in COMPONENTS],
+            # [2024, 2025] x [math L25, ELA L25, C&C accel, % points]; null if not in that year's file
+            "h": [prior[y].get(school_key(d)) for y in (2024, 2025)],
         })
 
     payload = {
@@ -104,6 +136,7 @@ def main():
         "types": TYPES,
         "fits": fits,
         "components": [lbl for _, lbl in COMPONENTS],
+        "cohorts": [cohorts[2024], cohorts[2025], "2024-25"],
         "rows": out,
     }
     page = TEMPLATE.replace("__DATA__", json.dumps(payload, separators=(",", ":")))
@@ -123,6 +156,8 @@ def main():
     for t, f in fits.items():
         print(f"  {TYPES[t]:<12} n={f['n']:<5} r={f['r']:<7} expected = {f['a']:.1f} {f['b']:+.3f} x ED%")
     print(f"  high-poverty (>=75% ED): {len(hp)}; >=10 pts above expected: {len(beat)}")
+    for k, y in enumerate((2024, 2025)):
+        print(f"  matched in {y} file: {sum(1 for r in out if r['h'][k])} of {len(out)} (C&C cohort {cohorts[y]})")
     print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB)")
 
 
@@ -240,6 +275,17 @@ td.school { white-space: normal; min-width: 220px; }
 .notes { color: var(--ink-2); font-size: 13px; }
 .notes li { margin: 4px 0; }
 .count { color: var(--ink-2); font-size: 12px; }
+.mtiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.mtiles .tile { padding: 10px 12px; }
+.mtiles .tile .v { font-size: 20px; }
+.mgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 14px; }
+@media (max-width: 860px) { .mgrid { grid-template-columns: 1fr; } }
+.mp h3 { font-size: 13px; font-weight: 600; margin: 0; }
+.mp .ms { color: var(--ink-2); font-size: 12px; margin: 2px 0 6px; min-height: 34px; }
+.mp svg { display: block; }
+.mline { fill: none; stroke-width: 2; stroke-linejoin: round; }
+.mdot { stroke: var(--surface); stroke-width: 2; }
+.mhit { fill: transparent; cursor: default; }
 </style>
 __BODY_OPEN__<main>
   <h1>Florida school performance vs. poverty</h1>
@@ -283,6 +329,26 @@ __BODY_OPEN__<main>
   </div>
 
   <div class="card">
+    <h2>Momentum toward an A: Title I vs. other schools</h2>
+    <p class="sub" id="mSub"></p>
+    <div class="mtiles" id="mTiles"></div>
+    <div class="legend" id="mLegend"></div>
+    <div class="mgrid" id="mPanels"></div>
+    <div class="tbar">
+      <div class="tl">
+        <h2 style="margin:0;font-size:14px">Title I schools</h2>
+        <select id="mMode">
+          <option value="near">Not yet A, closest first</option>
+          <option value="a">Earned an A in 2026</option>
+          <option value="all">All Title I</option>
+        </select>
+        <span class="count" id="mCount"></span>
+      </div>
+    </div>
+    <div class="tw" style="max-height:420px"><table><thead id="mHead"></thead><tbody id="mBody"></tbody></table></div>
+  </div>
+
+  <div class="card">
     <div class="tbar">
       <div class="tl">
         <h2 style="margin:0">Schools</h2>
@@ -312,7 +378,7 @@ const D = __DATA__;
 const $ = id => document.getElementById(id);
 const TYPES = D.types;
 const GRADES = ["A","B","C","D","F"];
-const S = { type: "01", dist: "ALL", ch: "ALL", t1: "ALL", pov: 75, res: 10, mode: "beat", q: "", sort: "res", dir: -1 };
+const S = { type: "01", dist: "ALL", ch: "ALL", t1: "ALL", pov: 75, res: 10, mode: "beat", q: "", sort: "res", dir: -1, mmode: "near", msort: "toA", mdir: 1 };
 let cur = [];
 
 const fmt1 = v => v == null ? "–" : (Math.round(v * 10) / 10).toFixed(1);
@@ -342,8 +408,9 @@ function initFilters() {
   bind("fType", "type"); bind("fDist", "dist"); bind("fCh", "ch"); bind("fT1", "t1");
   bind("fPov", "pov", "input", Number); bind("fRes", "res", "input", Number);
   bind("tMode", "mode"); bind("tSearch", "q", "input", v => v.trim().toLowerCase());
+  $("mMode").addEventListener("change", e => { S.mmode = e.target.value; drawMomTable(); });
   $("csv").addEventListener("click", downloadCsv);
-  addEventListener("resize", () => drawScatter());
+  addEventListener("resize", () => { drawScatter(); drawMomentum(); });
 }
 
 function filtered() {
@@ -477,6 +544,139 @@ function drawComponents() {
   });
 }
 
+// ---------- momentum toward an A ----------
+// Year index 0/1/2 = 2024/2025/2026. Measure j: 0 math L25, 1 ELA L25, 2 C&C acceleration, 3 % of points.
+const YRS = ["2024", "2025", "2026"];
+const AMIN = { "01": 62, "02": 64, "03": 65, "04": 65 };
+const C26 = [5, 2, 10];
+const MEAS = ["Math gains, lowest 25%", "ELA gains, lowest 25%", "College & career acceleration"];
+const mv = (r, j, y) => y === 2 ? (j === 3 ? r.pp : r.c[C26[j]]) : (r.h[y] ? r.h[y][j] : null);
+const gy = (r, y) => r.g[2 - y];
+const toA = r => Math.max(0, AMIN[r.t] - r.pp);
+const dlt = (r, j) => { const a = mv(r, j, 0), b = mv(r, j, 2); return a == null || b == null ? null : b - a; };
+const MSER = [
+  { k: "t1", name: "Title I", col: "--hi" },
+  { k: "nt", name: "Not Title I", col: "--other" },
+  { k: "a", name: "A schools (statewide)", col: "--ink-2", dash: true },
+];
+function momBase() {
+  return D.rows.filter(r => (S.type === "ALL" || r.t === S.type) && (S.dist === "ALL" || r.dn === S.dist) && (S.ch === "ALL" || r.ch === (S.ch === "Y")));
+}
+function drawMomentum() {
+  const base = momBase(), t1 = base.filter(r => r.t1), nt = base.filter(r => !r.t1);
+  const ref = D.rows.filter(r => S.type === "ALL" || r.t === S.type);
+  const typ = S.type === "ALL" ? "schools" : TYPES[S.type].toLowerCase() + " schools";
+  $("mSub").textContent = `Same schools each year (only those with a score in all three years), using 2026 Title I status. The dashed line is the average of every ${typ.replace(/s$/, "")} statewide that earned an A that year: the bar to clear. Follows the type, district and charter filters above.`;
+
+  // tiles
+  const aN = y => t1.filter(r => gy(r, y) === "A").length;
+  const gN = y => t1.filter(r => GRADES.includes(gy(r, y))).length;
+  const pc = y => gN(y) ? Math.round(100 * aN(y) / gN(y)) + "%" : "–";
+  const rose = t1.filter(r => gy(r, 2) === "A" && GRADES.includes(gy(r, 0)) && gy(r, 0) !== "A").length;
+  const near = t1.filter(r => GRADES.includes(gy(r, 2)) && gy(r, 2) !== "A" && toA(r) <= 5).length;
+  const tiles = [
+    [`Title I ${typ} with an A`, `${aN(0)} → ${aN(1)} → ${aN(2)}`, "2024 → 2025 → 2026"],
+    ["Share of graded Title I with an A", `${pc(0)} → ${pc(1)} → ${pc(2)}`, `${t1.length.toLocaleString()} Title I ${typ} in filter`],
+    ["Rose to an A since 2024", rose.toLocaleString(), "B or lower in 2024, A in 2026"],
+    ["Within 5 points of an A", near.toLocaleString(), "Not an A in 2026; ≤ 5 pts below the A cutoff"],
+  ];
+  $("mTiles").innerHTML = tiles.map(([l, v, d]) => `<div class="tile"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  $("mLegend").innerHTML = MSER.map(s => `<span><i class="sw" style="background:var(${s.col})${s.dash ? ";height:2px;border-radius:0" : ""}"></i>${s.name}</span>`).join("");
+
+  // series: balanced panel per group & measure; A reference = that year's A schools
+  const mean = vs => vs.length >= 5 ? { m: vs.reduce((a, b) => a + b, 0) / vs.length, n: vs.length } : null;
+  const panels = MEAS.map((lbl, j) => {
+    const bal = rs => rs.filter(r => [0, 1, 2].every(y => mv(r, j, y) != null));
+    const b1 = bal(t1), b2 = bal(nt);
+    const ser = {
+      t1: [0, 1, 2].map(y => mean(b1.map(r => mv(r, j, y)))),
+      nt: [0, 1, 2].map(y => mean(b2.map(r => mv(r, j, y)))),
+      a: [0, 1, 2].map(y => mean(ref.filter(r => gy(r, y) === "A" && mv(r, j, y) != null).map(r => mv(r, j, y)))),
+    };
+    return { lbl, j, ser };
+  });
+  const all = panels.flatMap(p => Object.values(p.ser).flat()).filter(Boolean).map(p => p.m);
+  const lo = all.length ? Math.max(0, Math.floor((Math.min(...all) - 4) / 10) * 10) : 0;
+  const hi = all.length ? Math.min(100, Math.ceil((Math.max(...all) + 4) / 10) * 10) : 100;
+
+  const host = $("mPanels");
+  host.innerHTML = panels.map((p, i) => `<div class="mp" id="mp${i}"></div>`).join("");
+  panels.forEach((p, i) => {
+    const el = $("mp" + i), s1 = p.ser.t1, sa = p.ser.a;
+    const has = Object.values(p.ser).some(v => v.some(Boolean));
+    let note;
+    if (!has) note = "Not scored for this school type, or too few schools in the filter.";
+    else {
+      const parts = [];
+      if (s1[0] && s1[2]) parts.push(`Title I ${sgn(s1[2].m - s1[0].m)} pts since 2024`);
+      if (s1[2] && sa[2]) { const g = sa[2].m - s1[2].m; parts.push(`${Math.abs(g).toFixed(1)} pts ${g >= 0 ? "behind" : "ahead of"} A schools in 2026`); }
+      note = parts.join(" · ") || "Too few Title I schools in the filter.";
+    }
+    const cc = p.j === 2 ? `<p class="count" style="margin:4px 0 0">Reported a year late: graduates of ${D.cohorts.join(", ")}.</p>` : "";
+    el.innerHTML = `<h3>${p.lbl}</h3><p class="ms">${note}</p>`;
+    if (!has) return;
+    const W = el.clientWidth || 320, H = 210, m = { l: 34, r: 40, t: 10, b: 24 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const X = y => m.l + iw * (0.08 + 0.84 * y / 2), Y = v => m.t + ih - (v - lo) / (hi - lo) * ih;
+    let s = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(p.lbl)} by year">`;
+    for (let v = lo; v <= hi; v += 10) {
+      s += `<line class="${v === lo ? "ax" : "gl"}" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+    }
+    YRS.forEach((yl, y) => { s += `<text x="${X(y)}" y="${H - 6}" text-anchor="middle">${yl}</text>`; });
+    const ends = [];
+    MSER.forEach(se => {
+      const pts = p.ser[se.k].map((v, y) => v && { x: X(y), y: Y(v.m), v, yr: y }).filter(Boolean);
+      if (!pts.length) return;
+      s += `<polyline class="mline" points="${pts.map(q => q.x.toFixed(1) + "," + q.y.toFixed(1)).join(" ")}" style="stroke:var(${se.col})"${se.dash ? ' stroke-dasharray="5 4"' : ""}/>`;
+      pts.forEach(q => {
+        s += `<circle class="mdot" cx="${q.x}" cy="${q.y}" r="4" style="fill:var(${se.col})"/>`;
+        const t = `<b>${se.name}</b> · ${YRS[q.yr]}<br>${esc(p.lbl)}: <b>${q.v.m.toFixed(1)}%</b><br><span class="k">${q.v.n} schools${se.k === "a" ? " graded A that year" : ", same schools all 3 years"}</span>`;
+        s += `<circle class="mhit" cx="${q.x}" cy="${q.y}" r="10" data-tip="${esc(t)}"/>`;
+      });
+      const last = pts[pts.length - 1];
+      if (last.yr === 2) ends.push({ y: last.y, txt: Math.round(last.v.m) });
+    });
+    ends.sort((a, b) => a.y - b.y);
+    for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 12) ends[k].y = ends[k - 1].y + 12;
+    ends.forEach(e => { s += `<text class="lbl-ink" x="${X(2) + 9}" y="${e.y + 4}">${e.txt}</text>`; });
+    el.innerHTML += s + "</svg>" + cc;
+    el.querySelectorAll(".mhit").forEach(c => {
+      c.addEventListener("mousemove", e => showTip(c.dataset.tip, e.clientX, e.clientY));
+      c.addEventListener("mouseleave", hideTip);
+    });
+  });
+  drawMomTable(t1);
+}
+
+const MCOLS = [
+  ["s", "School", 0], ["dn", "District", 0], ["m0", "2024", 0], ["m1", "2025", 0], ["m2", "2026", 0],
+  ["pp", "Points % 2026", 1], ["toA", "Pts to A", 1], ["d0", "Δ Math L25", 1], ["d1", "Δ ELA L25", 1], ["d2", "Δ C&C accel.", 1],
+];
+const mval = (r, k) => k === "toA" ? toA(r) : k[0] === "m" && k.length === 2 ? gy(r, +k[1]) : k[0] === "d" && k.length === 2 ? dlt(r, +k[1]) : r[k];
+let momT1 = [];
+function drawMomTable(t1) {
+  if (t1) momT1 = t1;
+  let rs = S.mmode === "near" ? momT1.filter(r => GRADES.includes(gy(r, 2)) && gy(r, 2) !== "A")
+    : S.mmode === "a" ? momT1.filter(r => gy(r, 2) === "A") : momT1.slice();
+  rs.sort((a, b) => {
+    const x = mval(a, S.msort), y = mval(b, S.msort);
+    if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return (x > y ? 1 : x < y ? -1 : 0) * S.mdir;
+  });
+  $("mHead").innerHTML = "<tr>" + MCOLS.map(([k, l, n]) => `<th class="${n ? "num" : ""}" data-k="${k}">${l} <span class="ar">${S.msort === k ? (S.mdir < 0 ? "▼" : "▲") : ""}</span></th>`).join("") + "</tr>";
+  $("mHead").querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.k; if (S.msort === k) S.mdir *= -1; else { S.msort = k; S.mdir = ["s", "dn", "toA"].includes(k) ? 1 : -1; } drawMomTable();
+  }));
+  $("mCount").textContent = `${rs.length.toLocaleString()} schools · Δ = change 2024 → 2026, in points`;
+  const dc = v => v == null ? "–" : sgn(v);
+  $("mBody").innerHTML = rs.slice(0, 1500).map(r => `<tr>
+    <td class="school">${esc(r.s)}</td><td>${esc(r.dn)}</td><td>${gy(r, 0) || "–"}</td><td>${gy(r, 1) || "–"}</td><td>${gy(r, 2) || "–"}</td>
+    <td class="num">${r.pp}</td><td class="num">${toA(r) ? toA(r) : "–"}</td>
+    <td class="num">${dc(dlt(r, 0))}</td><td class="num">${dc(dlt(r, 1))}</td><td class="num">${dc(dlt(r, 2))}</td></tr>`).join("") +
+    (rs.length ? "" : `<tr><td colspan="10" class="count">No Title I schools match.</td></tr>`) +
+    (rs.length > 1500 ? `<tr><td colspan="10" class="count">Showing first 1,500.</td></tr>` : "");
+}
+
 // ---------- table ----------
 const COLS = [
   ["s", "School", 0], ["dn", "District", 0], ["t", "Type", 0], ["ed", "Econ. disadv. %", 1], ["pp", "Points %", 1],
@@ -505,9 +705,11 @@ function drawTable() {
 }
 function downloadCsv() {
   const rs = tableRows();
-  const head = ["District", "School Number", "School", "Type", "Econ Disadv %", "Points %", "Expected %", "vs Expected", "Grade 2026", "Grade 2025", "Grade 2024", "Charter", "Title I", ...D.components];
+  const head = ["District", "School Number", "School", "Type", "Econ Disadv %", "Points %", "Expected %", "vs Expected", "Grade 2026", "Grade 2025", "Grade 2024", "Charter", "Title I", ...D.components,
+    ...[0, 1].flatMap(y => [`Points % ${YRS[y]}`, `Math gains lowest 25% ${YRS[y]}`, `ELA gains lowest 25% ${YRS[y]}`, `College & career acceleration ${YRS[y]} (${D.cohorts[y]})`])];
   const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  const lines = [head.join(",")].concat(rs.map(r => [r.dn, r.sn, r.s, TYPES[r.t], r.ed, r.pp, r.ex, r.res, ...r.g, r.ch ? "Yes" : "No", r.t1 ? "Yes" : "No", ...r.c].map(q).join(",")));
+  const lines = [head.join(",")].concat(rs.map(r => [r.dn, r.sn, r.s, TYPES[r.t], r.ed, r.pp, r.ex, r.res, ...r.g, r.ch ? "Yes" : "No", r.t1 ? "Yes" : "No", ...r.c,
+    ...[0, 1].flatMap(y => [mv(r, 3, y), mv(r, 0, y), mv(r, 1, y), mv(r, 2, y)])].map(q).join(",")));
   const text = lines.join("\r\n"), btn = $("csv"), box = $("csvBox");
   const done = msg => { btn.textContent = msg; setTimeout(() => { btn.textContent = "Copy table as CSV"; }, 2500); };
   const fallback = () => { box.value = text; box.hidden = false; box.focus(); box.select(); done("Select all and copy below"); };
@@ -527,7 +729,9 @@ function drawNotes() {
     `<b>Beating the odds</b> = at or above the high-poverty threshold and at least the chosen number of points above expected. Both thresholds are adjustable; neither is an FLDOE definition.`,
     `<b>The 100% stripe:</b> ${n100.toLocaleString()} schools report exactly 100% economically disadvantaged. Most are likely on the federal Community Eligibility Provision, where a whole school is counted as disadvantaged. Treat 100% as “high poverty, exact level unknown”, not as literally every student.`,
     `<b>Grade scales differ by type</b> (elementary A ≥ 62%, middle A ≥ 64%, high/combination A ≥ 65%), which is why the expected line is fit per type. “All types” mixes them.`,
-    `<b>One year only.</b> A school can beat the odds once by chance. The 2025 and 2024 grades in the table show whether it is a pattern. Earlier years’ points would need the prior-year files.`,
+    `<b>Beating the odds is one year.</b> A school can beat the odds once by chance. The 2025 and 2024 grades in the table show whether it is a pattern.`,
+    `<b>Momentum</b> uses the 2024 and 2025 School Grades files, matched on district and school number. The trend starts in 2024: 2023 was the baseline year of the new state test, with no learning gains. Title I lines average the same schools in all three years, grouped by 2026 Title I status. The A line is every school of that type graded A that year, so its schools change year to year. “Pts to A” uses the % of points cutoff for an A (elementary 62, middle 64, high and combination 65).`,
+    `<b>College & career acceleration runs a year behind</b>: the 2024, 2025 and 2026 grades use graduates of ${D.cohorts.join(", ")}. It is scored only for high and combination schools.`,
     `<b>Correlation, not cause.</b> This file has charter and Title I status only. Programs (magnet, IB/AP, tutoring, staffing) and per-pupil spending need other sources: the FLDOE School Public Accountability Reports and the federal Civil Rights Data Collection.`,
   ].map(t => `<li>${t}</li>`).join("");
 }
@@ -535,7 +739,7 @@ function drawNotes() {
 function render() {
   $("povV").textContent = S.pov; $("resV").textContent = S.res;
   cur = filtered();
-  drawTiles(); drawScatter(); drawGrades(); drawComponents(); drawTable();
+  drawTiles(); drawScatter(); drawGrades(); drawComponents(); drawMomentum(); drawTable();
 }
 initFilters(); drawNotes(); render();
 </script>
