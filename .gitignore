@@ -1,0 +1,7 @@
+# Local-only files: notes, raw data, editor/preview config, local copy of the page
+CONTEXT.md
+data/
+.claude/
+FL School Dashboard.html
+__pycache__/
+*.xlsx
