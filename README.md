@@ -11,6 +11,7 @@ An interactive dashboard of Florida's 2025-26 school grades plotted against pove
 - "Beating the odds" schools: at or above a poverty threshold and a set number of points above expected (both adjustable)
 - 2026 grade mix by poverty band
 - The score components where beating-the-odds schools lead other high-poverty schools
+- Momentum toward an A, 2024–2026: Title I vs. other schools on math and ELA learning gains of the lowest 25% and on college & career acceleration, against the statewide average for A schools, plus a list of Title I schools closest to an A
 - A sortable, searchable school table you can copy as CSV
 
 Method and caveats are listed at the bottom of the page.
@@ -21,7 +22,7 @@ Florida Department of Education, 2025-26 School Grades (`SchoolGrades26.xlsx`, a
 
 ## Rebuild
 
-1. Download the School Grades `.xlsx` from FLDOE into `data/`.
+1. Download the 2026, 2025 and 2024 School Grades `.xlsx` files from FLDOE into `data/` (`SchoolGrades26.xlsx`, `SchoolGrades25.xlsx`, `SchoolGrades24.xlsx`; earlier years are on the archives page).
 2. Run:
 
 ```bash
