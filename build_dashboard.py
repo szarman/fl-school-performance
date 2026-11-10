@@ -125,6 +125,8 @@ def main():
             "ch": d["Charter School"] == "YES",
             "t1": d["Title I"] == "YES",
             "c": [num(d[k]) for k, _ in COMPONENTS],
+            "tp": num(d["Total Points Earned"]),
+            "tc": num(d["Total Components"]),
             # [2024, 2025] x [math L25, ELA L25, C&C accel, % points]; null if not in that year's file
             "h": [prior[y].get(school_key(d)) for y in (2024, 2025)],
         })
@@ -321,8 +323,12 @@ __BODY_OPEN__<main>
       <div id="gbars"></div>
     </div>
     <div class="card">
-      <h2>Where the beating-the-odds schools pull ahead</h2>
-      <p class="sub">Average component score (% of students), high-poverty schools only.</p>
+      <h2 id="cTitle"></h2>
+      <p class="sub" id="cSub"></p>
+      <select id="cMode" aria-label="Groups to compare" style="margin-bottom:12px;max-width:100%">
+        <option value="beat">Beating the odds vs. other high-poverty</option>
+        <option value="t1a">Title I A schools vs. other A schools</option>
+      </select>
       <div class="legend" id="cLegend"></div>
       <div id="cbars"></div>
     </div>
@@ -345,6 +351,8 @@ __BODY_OPEN__<main>
         <span class="count" id="mCount"></span>
       </div>
     </div>
+    <p class="count" style="margin:0 0 10px"><b>Points needed</b> = component points short of an A; one point is one percentage point on any one component.
+      <b>Where to improve</b> = the three components furthest below the average Title I school of the same type that earned an A. Δ = change 2024 → 2026, in points.</p>
     <div class="tw" style="max-height:420px"><table><thead id="mHead"></thead><tbody id="mBody"></tbody></table></div>
   </div>
 
@@ -378,7 +386,7 @@ const D = __DATA__;
 const $ = id => document.getElementById(id);
 const TYPES = D.types;
 const GRADES = ["A","B","C","D","F"];
-const S = { type: "01", dist: "ALL", ch: "ALL", t1: "ALL", pov: 75, res: 10, mode: "beat", q: "", sort: "res", dir: -1, mmode: "near", msort: "toA", mdir: 1 };
+const S = { type: "01", dist: "ALL", ch: "ALL", t1: "ALL", pov: 75, res: 10, mode: "beat", q: "", sort: "res", dir: -1, mmode: "near", msort: "need", mdir: 1, cmode: "beat" };
 let cur = [];
 
 const fmt1 = v => v == null ? "–" : (Math.round(v * 10) / 10).toFixed(1);
@@ -409,6 +417,7 @@ function initFilters() {
   bind("fPov", "pov", "input", Number); bind("fRes", "res", "input", Number);
   bind("tMode", "mode"); bind("tSearch", "q", "input", v => v.trim().toLowerCase());
   $("mMode").addEventListener("change", e => { S.mmode = e.target.value; drawMomTable(); });
+  $("cMode").addEventListener("change", e => { S.cmode = e.target.value; drawComponents(); });
   $("csv").addEventListener("click", downloadCsv);
   addEventListener("resize", () => { drawScatter(); drawMomentum(); });
 }
@@ -525,15 +534,26 @@ function drawGrades() {
 
 // ---------- component comparison ----------
 function drawComponents() {
-  const hp = cur.filter(isHP), bt = hp.filter(isBeat), ot = hp.filter(r => !isBeat(r));
-  $("cLegend").innerHTML = `<span><i class="sw" style="background:var(--hi)"></i>Beating the odds (${bt.length})</span><span><i class="sw" style="background:var(--other)"></i>Other high-poverty (${ot.length})</span>`;
+  let bt, ot, nA, nB;
+  if (S.cmode === "t1a") {
+    const as = momBase().filter(r => r.g[0] === "A");
+    bt = as.filter(r => r.t1); ot = as.filter(r => !r.t1); nA = "Title I, graded A"; nB = "Not Title I, graded A";
+    $("cTitle").textContent = "How Title I A schools compare with other A schools";
+    $("cSub").textContent = "Average component score (% of students), schools graded A in 2026. Ignores the Title I and poverty settings.";
+  } else {
+    const hp = cur.filter(isHP);
+    bt = hp.filter(isBeat); ot = hp.filter(r => !isBeat(r)); nA = "Beating the odds"; nB = "Other high-poverty";
+    $("cTitle").textContent = "Where the beating-the-odds schools pull ahead";
+    $("cSub").textContent = "Average component score (% of students), high-poverty schools only.";
+  }
+  $("cLegend").innerHTML = `<span><i class="sw" style="background:var(--hi)"></i>${nA} (${bt.length})</span><span><i class="sw" style="background:var(--other)"></i>${nB} (${ot.length})</span>`;
   const avg = (rs, i) => { const v = rs.map(r => r.c[i]).filter(x => x != null); return v.length >= 5 ? { m: v.reduce((a, b) => a + b, 0) / v.length, n: v.length } : null; };
   const rows = D.components.map((lbl, i) => ({ lbl, a: avg(bt, i), b: avg(ot, i) })).filter(x => x.a && x.b);
-  if (!rows.length) { $("cbars").innerHTML = `<p class="count">Not enough beating-the-odds schools in this filter (need at least 5 per component).</p>`; return; }
+  if (!rows.length) { $("cbars").innerHTML = `<p class="count">Not enough schools in one of the two groups for this filter (need at least 5 per component).</p>`; return; }
   rows.sort((x, y) => (y.a.m - y.b.m) - (x.a.m - x.b.m));
   $("cbars").innerHTML = rows.map(x => {
     const gap = x.a.m - x.b.m;
-    const t = `<b>${x.lbl}</b><br>Beating the odds: ${x.a.m.toFixed(1)}% (${x.a.n} schools)<br>Other high-poverty: ${x.b.m.toFixed(1)}% (${x.b.n} schools)<br>Gap: ${sgn(gap)} pts`;
+    const t = `<b>${x.lbl}</b><br>${nA}: ${x.a.m.toFixed(1)}% (${x.a.n} schools)<br>${nB}: ${x.b.m.toFixed(1)}% (${x.b.n} schools)<br>Gap: ${sgn(gap)} pts`;
     return `<div class="crow" data-tip="${esc(t)}"><div class="cl">${x.lbl}<br><span style="color:var(--muted)">gap ${sgn(gap)}</span></div><div class="cbars">
       <div class="cbar"><i style="width:calc(${x.a.m}% - 40px);background:var(--hi)"></i><em>${Math.round(x.a.m)}</em></div>
       <div class="cbar"><i style="width:calc(${x.b.m}% - 40px);background:var(--other)"></i><em>${Math.round(x.b.m)}</em></div></div></div>`;
@@ -553,6 +573,16 @@ const MEAS = ["Math gains, lowest 25%", "ELA gains, lowest 25%", "College & care
 const mv = (r, j, y) => y === 2 ? (j === 3 ? r.pp : r.c[C26[j]]) : (r.h[y] ? r.h[y][j] : null);
 const gy = (r, y) => r.g[2 - y];
 const toA = r => Math.max(0, AMIN[r.t] - r.pp);
+// FLDOE rounds % of points half up, so an A needs (cutoff - 0.5)% of the possible points.
+const need = r => r.tp == null || !r.tc ? null : Math.max(0, Math.ceil((AMIN[r.t] - 0.5) * r.tc) - r.tp);
+// Average component scores of Title I schools graded A in 2026, per school type: the peer benchmark.
+const REFA = {};
+Object.keys(D.types).forEach(t => {
+  const rs = D.rows.filter(r => r.t === t && r.t1 && r.g[0] === "A");
+  REFA[t] = D.components.map((_, i) => { const v = rs.map(r => r.c[i]).filter(x => x != null); return v.length >= 5 ? v.reduce((a, b) => a + b, 0) / v.length : null; });
+});
+const improve = r => D.components.map((lbl, i) => r.c[i] != null && REFA[r.t][i] != null ? { lbl, v: r.c[i], g: REFA[r.t][i] - r.c[i] } : null)
+  .filter(x => x && x.g >= 0.5).sort((a, b) => b.g - a.g).slice(0, 3);
 const dlt = (r, j) => { const a = mv(r, j, 0), b = mv(r, j, 2); return a == null || b == null ? null : b - a; };
 const MSER = [
   { k: "t1", name: "Title I", col: "--hi" },
@@ -650,9 +680,10 @@ function drawMomentum() {
 
 const MCOLS = [
   ["s", "School", 0], ["dn", "District", 0], ["m0", "2024", 0], ["m1", "2025", 0], ["m2", "2026", 0],
-  ["pp", "Points % 2026", 1], ["toA", "Pts to A", 1], ["d0", "Δ Math L25", 1], ["d1", "Δ ELA L25", 1], ["d2", "Δ C&C accel.", 1],
+  ["pp", "Points % 2026", 1], ["need", "Points needed", 1], ["imp", "Where to improve: score (gap to Title I A average)", 0],
+  ["d0", "Δ Math L25", 1], ["d1", "Δ ELA L25", 1], ["d2", "Δ C&C accel.", 1],
 ];
-const mval = (r, k) => k === "toA" ? toA(r) : k[0] === "m" && k.length === 2 ? gy(r, +k[1]) : k[0] === "d" && k.length === 2 ? dlt(r, +k[1]) : r[k];
+const mval = (r, k) => k === "need" ? need(r) : k === "imp" ? (improve(r)[0] || { g: null }).g : k[0] === "m" && k.length === 2 ? gy(r, +k[1]) : k[0] === "d" && k.length === 2 ? dlt(r, +k[1]) : r[k];
 let momT1 = [];
 function drawMomTable(t1) {
   if (t1) momT1 = t1;
@@ -665,16 +696,17 @@ function drawMomTable(t1) {
   });
   $("mHead").innerHTML = "<tr>" + MCOLS.map(([k, l, n]) => `<th class="${n ? "num" : ""}" data-k="${k}">${l} <span class="ar">${S.msort === k ? (S.mdir < 0 ? "▼" : "▲") : ""}</span></th>`).join("") + "</tr>";
   $("mHead").querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
-    const k = th.dataset.k; if (S.msort === k) S.mdir *= -1; else { S.msort = k; S.mdir = ["s", "dn", "toA"].includes(k) ? 1 : -1; } drawMomTable();
+    const k = th.dataset.k; if (S.msort === k) S.mdir *= -1; else { S.msort = k; S.mdir = ["s", "dn", "need"].includes(k) ? 1 : -1; } drawMomTable();
   }));
-  $("mCount").textContent = `${rs.length.toLocaleString()} schools · Δ = change 2024 → 2026, in points`;
+  $("mCount").textContent = `${rs.length.toLocaleString()} schools`;
   const dc = v => v == null ? "–" : sgn(v);
   $("mBody").innerHTML = rs.slice(0, 1500).map(r => `<tr>
     <td class="school">${esc(r.s)}</td><td>${esc(r.dn)}</td><td>${gy(r, 0) || "–"}</td><td>${gy(r, 1) || "–"}</td><td>${gy(r, 2) || "–"}</td>
-    <td class="num">${r.pp}</td><td class="num">${toA(r) ? toA(r) : "–"}</td>
+    <td class="num">${r.pp}</td><td class="num">${need(r) ? need(r) : "–"}</td>
+    <td class="school">${improve(r).map(x => `${x.lbl} <b>${Math.round(x.v)}</b> (−${Math.round(x.g)})`).join("<br>") || "–"}</td>
     <td class="num">${dc(dlt(r, 0))}</td><td class="num">${dc(dlt(r, 1))}</td><td class="num">${dc(dlt(r, 2))}</td></tr>`).join("") +
-    (rs.length ? "" : `<tr><td colspan="10" class="count">No Title I schools match.</td></tr>`) +
-    (rs.length > 1500 ? `<tr><td colspan="10" class="count">Showing first 1,500.</td></tr>` : "");
+    (rs.length ? "" : `<tr><td colspan="11" class="count">No Title I schools match.</td></tr>`) +
+    (rs.length > 1500 ? `<tr><td colspan="11" class="count">Showing first 1,500.</td></tr>` : "");
 }
 
 // ---------- table ----------
@@ -705,10 +737,10 @@ function drawTable() {
 }
 function downloadCsv() {
   const rs = tableRows();
-  const head = ["District", "School Number", "School", "Type", "Econ Disadv %", "Points %", "Expected %", "vs Expected", "Grade 2026", "Grade 2025", "Grade 2024", "Charter", "Title I", ...D.components,
+  const head = ["District", "School Number", "School", "Type", "Econ Disadv %", "Points %", "Expected %", "vs Expected", "Grade 2026", "Grade 2025", "Grade 2024", "Charter", "Title I", ...D.components, "Total points 2026", "Components 2026", "Points needed for an A",
     ...[0, 1].flatMap(y => [`Points % ${YRS[y]}`, `Math gains lowest 25% ${YRS[y]}`, `ELA gains lowest 25% ${YRS[y]}`, `College & career acceleration ${YRS[y]} (${D.cohorts[y]})`])];
   const q = v => v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  const lines = [head.join(",")].concat(rs.map(r => [r.dn, r.sn, r.s, TYPES[r.t], r.ed, r.pp, r.ex, r.res, ...r.g, r.ch ? "Yes" : "No", r.t1 ? "Yes" : "No", ...r.c,
+  const lines = [head.join(",")].concat(rs.map(r => [r.dn, r.sn, r.s, TYPES[r.t], r.ed, r.pp, r.ex, r.res, ...r.g, r.ch ? "Yes" : "No", r.t1 ? "Yes" : "No", ...r.c, r.tp, r.tc, need(r),
     ...[0, 1].flatMap(y => [mv(r, 3, y), mv(r, 0, y), mv(r, 1, y), mv(r, 2, y)])].map(q).join(",")));
   const text = lines.join("\r\n"), btn = $("csv"), box = $("csvBox");
   const done = msg => { btn.textContent = msg; setTimeout(() => { btn.textContent = "Copy table as CSV"; }, 2500); };
@@ -730,7 +762,7 @@ function drawNotes() {
     `<b>The 100% stripe:</b> ${n100.toLocaleString()} schools report exactly 100% economically disadvantaged. Most are likely on the federal Community Eligibility Provision, where a whole school is counted as disadvantaged. Treat 100% as “high poverty, exact level unknown”, not as literally every student.`,
     `<b>Grade scales differ by type</b> (elementary A ≥ 62%, middle A ≥ 64%, high/combination A ≥ 65%), which is why the expected line is fit per type. “All types” mixes them.`,
     `<b>Beating the odds is one year.</b> A school can beat the odds once by chance. The 2025 and 2024 grades in the table show whether it is a pattern.`,
-    `<b>Momentum</b> uses the 2024 and 2025 School Grades files, matched on district and school number. The trend starts in 2024: 2023 was the baseline year of the new state test, with no learning gains. Title I lines average the same schools in all three years, grouped by 2026 Title I status. The A line is every school of that type graded A that year, so its schools change year to year. “Pts to A” uses the % of points cutoff for an A (elementary 62, middle 64, high and combination 65).`,
+    `<b>Momentum</b> uses the 2024 and 2025 School Grades files, matched on district and school number. The trend starts in 2024: 2023 was the baseline year of the new state test, with no learning gains. Title I lines average the same schools in all three years, grouped by 2026 Title I status. The A line is every school of that type graded A that year, so its schools change year to year. <b>Points needed</b> is how many component points a school is short of an A. FLDOE rounds the % of points to a whole number, so a high school needs 645 of 1,000 points (64.5%) for the 65% cutoff (elementary 62, middle 64, high and combination 65). <b>Where to improve</b> compares each component with the average Title I school of the same type graded A in 2026 and lists the three largest shortfalls; it shows where a school trails its successful peers, not what will work.`,
     `<b>College & career acceleration runs a year behind</b>: the 2024, 2025 and 2026 grades use graduates of ${D.cohorts.join(", ")}. It is scored only for high and combination schools.`,
     `<b>Correlation, not cause.</b> This file has charter and Title I status only. Programs (magnet, IB/AP, tutoring, staffing) and per-pupil spending need other sources: the FLDOE School Public Accountability Reports and the federal Civil Rights Data Collection.`,
   ].map(t => `<li>${t}</li>`).join("");
