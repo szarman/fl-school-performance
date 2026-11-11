@@ -120,6 +120,7 @@ td.school { white-space: normal; min-width: 220px; }
 .mline { fill: none; stroke-width: 2; stroke-linejoin: round; }
 .mdot { stroke: var(--surface); stroke-width: 2; }
 .mhit { fill: transparent; cursor: default; }
+th.imp, td.imp { white-space: normal; min-width: 170px; }
 </style>
 </head>
 <body>
@@ -186,7 +187,7 @@ td.school { white-space: normal; min-width: 220px; }
       </div>
     </div>
     <p class="count" style="margin:0 0 10px"><b>Points needed</b> = component points short of an A; one point is one percentage point on any one component.
-      <b>Where to improve</b> = the three components furthest below the average Title I school of the same type that earned an A. Δ = change 2024 → 2026, in points.</p>
+      <b>Where to improve</b> = the three components furthest below the average Title I school of the same type that earned an A, with the school's score and its gap. L25 = lowest 25% of students; C&C = college & career. Δ = change 2024 → 2026, in points.</p>
     <div class="tw" style="max-height:420px"><table><thead id="mHead"></thead><tbody id="mBody"></tbody></table></div>
   </div>
 
@@ -415,7 +416,8 @@ Object.keys(D.types).forEach(t => {
   const rs = D.rows.filter(r => r.t === t && r.t1 && r.g[0] === "A");
   REFA[t] = D.components.map((_, i) => { const v = rs.map(r => r.c[i]).filter(x => x != null); return v.length >= 5 ? v.reduce((a, b) => a + b, 0) / v.length : null; });
 });
-const improve = r => D.components.map((lbl, i) => r.c[i] != null && REFA[r.t][i] != null ? { lbl, v: r.c[i], g: REFA[r.t][i] - r.c[i] } : null)
+const SHORT = ["ELA ach.", "ELA gains", "ELA gains L25", "Math ach.", "Math gains", "Math gains L25", "Science", "Social studies", "MS accel.", "Grad. rate", "C&C accel."];
+const improve = r => D.components.map((_, i) => r.c[i] != null && REFA[r.t][i] != null ? { lbl: SHORT[i], v: r.c[i], g: REFA[r.t][i] - r.c[i] } : null)
   .filter(x => x && x.g >= 0.5).sort((a, b) => b.g - a.g).slice(0, 3);
 const dlt = (r, j) => { const a = mv(r, j, 0), b = mv(r, j, 2); return a == null || b == null ? null : b - a; };
 const MSER = [
@@ -514,7 +516,7 @@ function drawMomentum() {
 
 const MCOLS = [
   ["s", "School", 0], ["dn", "District", 0], ["m0", "2024", 0], ["m1", "2025", 0], ["m2", "2026", 0],
-  ["pp", "Points % 2026", 1], ["need", "Points needed", 1], ["imp", "Where to improve: score (gap to Title I A average)", 0],
+  ["pp", "Points % 2026", 1], ["need", "Points needed", 1], ["imp", "Where to improve (gap to Title I A avg.)", 0],
   ["d0", "Δ Math L25", 1], ["d1", "Δ ELA L25", 1], ["d2", "Δ C&C accel.", 1],
 ];
 const mval = (r, k) => k === "need" ? need(r) : k === "imp" ? (improve(r)[0] || { g: null }).g : k[0] === "m" && k.length === 2 ? gy(r, +k[1]) : k[0] === "d" && k.length === 2 ? dlt(r, +k[1]) : r[k];
@@ -528,7 +530,7 @@ function drawMomTable(t1) {
     if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
     return (x > y ? 1 : x < y ? -1 : 0) * S.mdir;
   });
-  $("mHead").innerHTML = "<tr>" + MCOLS.map(([k, l, n]) => `<th class="${n ? "num" : ""}" data-k="${k}">${l} <span class="ar">${S.msort === k ? (S.mdir < 0 ? "▼" : "▲") : ""}</span></th>`).join("") + "</tr>";
+  $("mHead").innerHTML = "<tr>" + MCOLS.map(([k, l, n]) => `<th class="${n ? "num" : k === "imp" ? "imp" : ""}" data-k="${k}">${l} <span class="ar">${S.msort === k ? (S.mdir < 0 ? "▼" : "▲") : ""}</span></th>`).join("") + "</tr>";
   $("mHead").querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
     const k = th.dataset.k; if (S.msort === k) S.mdir *= -1; else { S.msort = k; S.mdir = ["s", "dn", "need"].includes(k) ? 1 : -1; } drawMomTable();
   }));
@@ -537,7 +539,7 @@ function drawMomTable(t1) {
   $("mBody").innerHTML = rs.slice(0, 1500).map(r => `<tr>
     <td class="school">${esc(r.s)}</td><td>${esc(r.dn)}</td><td>${gy(r, 0) || "–"}</td><td>${gy(r, 1) || "–"}</td><td>${gy(r, 2) || "–"}</td>
     <td class="num">${r.pp}</td><td class="num">${need(r) ? need(r) : "–"}</td>
-    <td class="school">${improve(r).map(x => `${x.lbl} <b>${Math.round(x.v)}</b> (−${Math.round(x.g)})`).join("<br>") || "–"}</td>
+    <td class="imp">${improve(r).map(x => `${x.lbl} <b>${Math.round(x.v)}</b> (−${Math.round(x.g)})`).join("<br>") || "–"}</td>
     <td class="num">${dc(dlt(r, 0))}</td><td class="num">${dc(dlt(r, 1))}</td><td class="num">${dc(dlt(r, 2))}</td></tr>`).join("") +
     (rs.length ? "" : `<tr><td colspan="11" class="count">No Title I schools match.</td></tr>`) +
     (rs.length > 1500 ? `<tr><td colspan="11" class="count">Showing first 1,500.</td></tr>` : "");
